@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/limiter"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider/edge"
@@ -94,11 +95,16 @@ type ApiProvider struct {
 
 	rateLimiter *rate.Limiter
 
+	// Single mutex for all cache operations
+	cacheMu sync.RWMutex
+
+	// User cache
 	users      map[string]slack.User
 	usersInv   map[string]string
 	usersCache string
 	usersReady bool
 
+	// Channel cache
 	channels      map[string]Channel
 	channelsInv   map[string]string
 	channelsCache string
@@ -488,14 +494,16 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 				zap.String("cache_file", ap.usersCache),
 				zap.Error(err))
 		} else {
+			ap.cacheMu.Lock()
 			for _, u := range cachedUsers {
 				ap.users[u.ID] = u
 				ap.usersInv[u.Name] = u.ID
 			}
+			ap.usersReady = true
+			ap.cacheMu.Unlock()
 			ap.logger.Info("Loaded users from cache",
 				zap.Int("count", len(cachedUsers)),
 				zap.String("cache_file", ap.usersCache))
-			ap.usersReady = true
 			return nil
 		}
 	}
@@ -503,7 +511,9 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 	// Check if client is nil (demo mode)
 	if ap.client == nil {
 		ap.logger.Warn("Client is nil, skipping user refresh")
+		ap.cacheMu.Lock()
 		ap.usersReady = true
+		ap.cacheMu.Unlock()
 		return nil
 	}
 
@@ -519,31 +529,44 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 	if err != nil {
 		ap.logger.Error("Failed to fetch users", zap.Error(utils.SanitizeError(err)))
 		return err
-	} else {
-		list = append(list, users...)
 	}
-
-	for _, user := range users {
-		ap.users[user.ID] = user
-		ap.usersInv[user.Name] = user.ID
-		usersCounter++
-	}
+	list = append(list, users...)
 
 	users, err = ap.GetSlackConnect(ctx)
 	if err != nil {
 		ap.logger.Error("Failed to fetch users from Slack Connect", zap.Error(utils.SanitizeError(err)))
 		return err
-	} else {
-		list = append(list, users...)
+	}
+	list = append(list, users...)
+
+	// Update cache and mark as ready in a single lock
+	ap.cacheMu.Lock()
+	// Clear existing maps
+	for k := range ap.users {
+		delete(ap.users, k)
+	}
+	for k := range ap.usersInv {
+		delete(ap.usersInv, k)
 	}
 
-	for _, user := range users {
+	// Add all users - duplicates will be automatically handled by map
+	for _, user := range list {
 		ap.users[user.ID] = user
 		ap.usersInv[user.Name] = user.ID
-		usersCounter++
+	}
+	usersCounter = len(ap.users)
+
+	// Create list for file while we still have the lock
+	usersList := make([]slack.User, 0, len(ap.users))
+	for _, user := range ap.users {
+		usersList = append(usersList, user)
 	}
 
-	if data, err := json.MarshalIndent(list, "", "  "); err != nil {
+	ap.usersReady = true
+	ap.cacheMu.Unlock()
+
+	// Write to file outside of lock
+	if data, err := json.MarshalIndent(usersList, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal users for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
 		if err := ioutil.WriteFile(ap.usersCache, data, 0644); err != nil {
@@ -557,8 +580,6 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 		}
 	}
 
-	ap.usersReady = true
-
 	return nil
 }
 
@@ -570,14 +591,16 @@ func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
 				zap.String("cache_file", ap.channelsCache),
 				zap.Error(err))
 		} else {
+			ap.cacheMu.Lock()
 			for _, c := range cachedChannels {
 				ap.channels[c.ID] = c
 				ap.channelsInv[c.Name] = c.ID
 			}
+			ap.channelsReady = true
+			ap.cacheMu.Unlock()
 			ap.logger.Info("Loaded channels from cache",
 				zap.Int("count", len(cachedChannels)),
 				zap.String("cache_file", ap.channelsCache))
-			ap.channelsReady = true
 			return nil
 		}
 	}
@@ -585,12 +608,19 @@ func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
 	// Check if client is nil (demo mode)
 	if ap.client == nil {
 		ap.logger.Warn("Client is nil, skipping channel refresh")
+		ap.cacheMu.Lock()
 		ap.channelsReady = true
+		ap.cacheMu.Unlock()
 		return nil
 	}
 
-	channels := ap.GetChannels(ctx, AllChanTypes)
+	// Fetch channels and mark as ready with lock held
+	ap.cacheMu.Lock()
+	channels := ap.unsafeGetChannels(ctx, AllChanTypes)
+	ap.channelsReady = true
+	ap.cacheMu.Unlock()
 
+	// Write to file outside of lock
 	if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal channels for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
@@ -604,8 +634,6 @@ func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
 				zap.String("cache_file", ap.channelsCache))
 		}
 	}
-
-	ap.channelsReady = true
 
 	return nil
 }
@@ -630,16 +658,19 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 	}
 
 	var collectedIDs []string
+
+	// Lock once for the entire loop
+	ap.cacheMu.RLock()
 	for _, im := range boot.IMs {
 		if !im.IsShared && !im.IsExtShared {
 			continue
 		}
 
-		_, ok := ap.users[im.User]
-		if !ok {
+		if _, ok := ap.users[im.User]; !ok {
 			collectedIDs = append(collectedIDs, im.User)
 		}
 	}
+	ap.cacheMu.RUnlock()
 
 	res := make([]slack.User, 0, len(collectedIDs))
 	if len(collectedIDs) > 0 {
@@ -664,6 +695,14 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 }
 
 func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) []Channel {
+	ap.cacheMu.Lock()
+	defer ap.cacheMu.Unlock()
+
+	return ap.unsafeGetChannels(ctx, channelTypes)
+}
+
+// unsafeGetChannels fetches channels without any locking - caller must hold ap.cacheMu
+func (ap *ApiProvider) unsafeGetChannels(ctx context.Context, channelTypes []string) []Channel {
 	if len(channelTypes) == 0 {
 		channelTypes = AllChanTypes
 	}
@@ -726,11 +765,12 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 				channel.IsIM,
 				channel.IsMpIM,
 				channel.IsPrivate,
-				ap.ProvideUsersMap().Users,
+				ap.users,
 			)
 			chans = append(chans, ch)
 		}
 
+		// Update cache directly
 		for _, ch := range chans {
 			ap.channels[ch.ID] = ch
 			ap.channelsInv[ch.Name] = ch.ID
@@ -765,20 +805,49 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 }
 
 func (ap *ApiProvider) ProvideUsersMap() *UsersCache {
+	ap.cacheMu.RLock()
+	defer ap.cacheMu.RUnlock()
+
+	// Create a copy of the maps to avoid race conditions
+	usersCopy := make(map[string]slack.User, len(ap.users))
+	for k, v := range ap.users {
+		usersCopy[k] = v
+	}
+	usersInvCopy := make(map[string]string, len(ap.usersInv))
+	for k, v := range ap.usersInv {
+		usersInvCopy[k] = v
+	}
+
 	return &UsersCache{
-		Users:    ap.users,
-		UsersInv: ap.usersInv,
+		Users:    usersCopy,
+		UsersInv: usersInvCopy,
 	}
 }
 
 func (ap *ApiProvider) ProvideChannelsMaps() *ChannelsCache {
+	ap.cacheMu.RLock()
+	defer ap.cacheMu.RUnlock()
+
+	// Create a copy of the maps to avoid race conditions
+	channelsCopy := make(map[string]Channel, len(ap.channels))
+	for k, v := range ap.channels {
+		channelsCopy[k] = v
+	}
+	channelsInvCopy := make(map[string]string, len(ap.channelsInv))
+	for k, v := range ap.channelsInv {
+		channelsInvCopy[k] = v
+	}
+
 	return &ChannelsCache{
-		Channels:    ap.channels,
-		ChannelsInv: ap.channelsInv,
+		Channels:    channelsCopy,
+		ChannelsInv: channelsInvCopy,
 	}
 }
 
 func (ap *ApiProvider) IsReady() (bool, error) {
+	ap.cacheMu.RLock()
+	defer ap.cacheMu.RUnlock()
+	
 	if !ap.usersReady {
 		return false, ErrUsersNotReady
 	}

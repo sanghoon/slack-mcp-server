@@ -59,34 +59,34 @@ func TestEnforceRateLimit(t *testing.T) {
 func TestRateLimitedAPICalls(t *testing.T) {
 	// Create a rate limiter that allows 2 requests per second
 	limiter := rate.NewLimiter(rate.Every(500*time.Millisecond), 2)
-	
+
 	ap := &ApiProvider{
 		rateLimiter: limiter,
 	}
 
 	// Test that we can make 2 calls immediately
 	ctx := context.Background()
-	
+
 	start := time.Now()
-	
+
 	// First call should succeed immediately
 	err := ap.enforceRateLimit(ctx)
 	if err != nil {
 		t.Errorf("first call failed: %v", err)
 	}
-	
+
 	// Second call should succeed immediately (burst of 2)
 	err = ap.enforceRateLimit(ctx)
 	if err != nil {
 		t.Errorf("second call failed: %v", err)
 	}
-	
+
 	// Third call should be rate limited and take ~500ms
 	err = ap.enforceRateLimit(ctx)
 	if err != nil {
 		t.Errorf("third call failed: %v", err)
 	}
-	
+
 	elapsed := time.Since(start)
 	if elapsed < 400*time.Millisecond {
 		t.Errorf("rate limiting not working: elapsed time %v, expected >= 400ms", elapsed)
