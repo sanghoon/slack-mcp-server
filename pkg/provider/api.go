@@ -507,6 +507,12 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 		return nil
 	}
 
+	// Apply rate limiting
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		ap.logger.Error("Rate limiter error while fetching users", zap.Error(utils.SanitizeError(err)))
+		return err
+	}
+
 	users, err := ap.client.GetUsersContext(ctx,
 		optionLimit,
 	)
@@ -611,6 +617,12 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 		return []slack.User{}, nil
 	}
 
+	// Apply rate limiting
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		ap.logger.Error("Rate limiter error in GetSlackConnect", zap.Error(utils.SanitizeError(err)))
+		return nil, err
+	}
+
 	boot, err := ap.client.ClientUserBoot(ctx)
 	if err != nil {
 		ap.logger.Error("Failed to fetch client user boot", zap.Error(utils.SanitizeError(err)))
@@ -631,6 +643,12 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 
 	res := make([]slack.User, 0, len(collectedIDs))
 	if len(collectedIDs) > 0 {
+		// Apply rate limiting
+		if err := ap.enforceRateLimit(ctx); err != nil {
+			ap.logger.Error("Rate limiter error while fetching users info", zap.Error(utils.SanitizeError(err)))
+			return nil, err
+		}
+
 		usersInfo, err := ap.client.GetUsersInfo(strings.Join(collectedIDs, ","))
 		if err != nil {
 			ap.logger.Error("Failed to fetch users info for shared IMs", zap.Error(utils.SanitizeError(err)))
@@ -685,7 +703,7 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 	for {
 		if err := ap.rateLimiter.Wait(ctx); err != nil {
 			ap.logger.Error("Rate limiter wait failed", zap.Error(utils.SanitizeError(err)))
-			return nil
+			return chans // Return what we have so far instead of nil
 		}
 
 		channels, nextcur, err = ap.client.GetConversationsContext(ctx, params)
@@ -776,6 +794,54 @@ func (ap *ApiProvider) ServerTransport() string {
 
 func (ap *ApiProvider) Slack() SlackAPI {
 	return ap.client
+}
+
+// enforceRateLimit applies rate limiting to API calls
+func (ap *ApiProvider) enforceRateLimit(ctx context.Context) error {
+	if ap.rateLimiter == nil {
+		return nil
+	}
+	return ap.rateLimiter.Wait(ctx)
+}
+
+// GetConversationHistoryContext wraps the Slack API call with rate limiting
+func (ap *ApiProvider) GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		return nil, err
+	}
+	return ap.client.GetConversationHistoryContext(ctx, params)
+}
+
+// GetConversationRepliesContext wraps the Slack API call with rate limiting
+func (ap *ApiProvider) GetConversationRepliesContext(ctx context.Context, params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		return nil, false, "", err
+	}
+	return ap.client.GetConversationRepliesContext(ctx, params)
+}
+
+// SearchContext wraps the Slack API call with rate limiting
+func (ap *ApiProvider) SearchContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, *slack.SearchFiles, error) {
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return ap.client.SearchContext(ctx, query, params)
+}
+
+// PostMessageContext wraps the Slack API call with rate limiting
+func (ap *ApiProvider) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		return "", "", err
+	}
+	return ap.client.PostMessageContext(ctx, channelID, options...)
+}
+
+// MarkConversationContext wraps the Slack API call with rate limiting
+func (ap *ApiProvider) MarkConversationContext(ctx context.Context, channel, ts string) error {
+	if err := ap.enforceRateLimit(ctx); err != nil {
+		return err
+	}
+	return ap.client.MarkConversationContext(ctx, channel, ts)
 }
 
 func mapChannel(
