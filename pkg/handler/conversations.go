@@ -17,6 +17,7 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/server/auth"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
 	"github.com/korotovsky/slack-mcp-server/pkg/utils"
+	"github.com/korotovsky/slack-mcp-server/pkg/validation"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
 	slackGoUtil "github.com/takara2314/slack-go-util"
@@ -162,6 +163,24 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 		return nil, err
 	}
 
+	// Validate channel ID
+	if err := validation.ValidateChannelID(params.channel); err != nil {
+		ch.logger.Error("Invalid channel ID", zap.String("channel", params.channel), zap.Error(err))
+		return nil, fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	// Validate message content
+	if err := validation.ValidateMessage(params.text); err != nil {
+		ch.logger.Error("Invalid message content", zap.Error(err))
+		return nil, fmt.Errorf("invalid message: %w", err)
+	}
+
+	// Validate thread timestamp if provided
+	if err := validation.ValidateTimestamp(params.threadTs); err != nil {
+		ch.logger.Error("Invalid thread timestamp", zap.String("threadTs", params.threadTs), zap.Error(err))
+		return nil, fmt.Errorf("invalid thread timestamp: %w", err)
+	}
+
 	var options []slack.MsgOption
 	if params.threadTs != "" {
 		options = append(options, slack.MsgOptionTS(params.threadTs))
@@ -240,6 +259,35 @@ func (ch *ConversationsHandler) ConversationsHistoryHandler(ctx context.Context,
 		ch.logger.Error("Failed to parse history params", zap.Error(err))
 		return nil, err
 	}
+
+	// Validate channel ID
+	if err := validation.ValidateChannelID(params.channel); err != nil {
+		ch.logger.Error("Invalid channel ID", zap.String("channel", params.channel), zap.Error(err))
+		return nil, fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	// Validate limit
+	if err := validation.ValidateLimit(params.limit); err != nil {
+		ch.logger.Error("Invalid limit", zap.Int("limit", params.limit), zap.Error(err))
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
+	// Validate timestamps
+	if err := validation.ValidateTimestamp(params.oldest); err != nil {
+		ch.logger.Error("Invalid oldest timestamp", zap.String("oldest", params.oldest), zap.Error(err))
+		return nil, fmt.Errorf("invalid oldest timestamp: %w", err)
+	}
+	if err := validation.ValidateTimestamp(params.latest); err != nil {
+		ch.logger.Error("Invalid latest timestamp", zap.String("latest", params.latest), zap.Error(err))
+		return nil, fmt.Errorf("invalid latest timestamp: %w", err)
+	}
+
+	// Validate cursor
+	if err := validation.ValidateCursor(params.cursor); err != nil {
+		ch.logger.Error("Invalid cursor", zap.String("cursor", params.cursor), zap.Error(err))
+		return nil, fmt.Errorf("invalid cursor: %w", err)
+	}
+
 	ch.logger.Debug("History params parsed",
 		zap.String("channel", params.channel),
 		zap.Int("limit", params.limit),
@@ -281,10 +329,22 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 		ch.logger.Error("Failed to parse replies params", zap.Error(err))
 		return nil, err
 	}
+
+	// Validate channel ID
+	if err := validation.ValidateChannelID(params.channel); err != nil {
+		ch.logger.Error("Invalid channel ID", zap.String("channel", params.channel), zap.Error(err))
+		return nil, fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	// Get thread timestamp
 	threadTs := request.GetString("thread_ts", "")
 	if threadTs == "" {
-		ch.logger.Error("thread_ts not provided for replies", zap.String("thread_ts", threadTs))
-		return nil, errors.New("thread_ts must be a string")
+		ch.logger.Error("Thread timestamp is required")
+		return nil, errors.New("thread_ts is required for replies")
+	}
+	if err := validation.ValidateTimestamp(threadTs); err != nil {
+		ch.logger.Error("Invalid thread timestamp", zap.String("threadTs", threadTs), zap.Error(err))
+		return nil, fmt.Errorf("invalid thread timestamp: %w", err)
 	}
 
 	repliesParams := slack.GetConversationRepliesParameters{
@@ -320,6 +380,19 @@ func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, 
 	}
 	ch.logger.Debug("Search params parsed", zap.String("query", params.query), zap.Int("limit", params.limit), zap.Int("page", params.page))
 
+	// Validate and sanitize search query
+	sanitizedQuery, err := validation.ValidateSearchQuery(params.query)
+	if err != nil {
+		ch.logger.Error("Invalid search query", zap.Error(err))
+		return nil, fmt.Errorf("invalid search query: %w", err)
+	}
+
+	// Validate limit
+	if err := validation.ValidateLimit(params.limit); err != nil {
+		ch.logger.Error("Invalid limit", zap.Error(err))
+		return nil, fmt.Errorf("invalid limit: %w", err)
+	}
+
 	searchParams := slack.SearchParameters{
 		Sort:          slack.DEFAULT_SEARCH_SORT,
 		SortDirection: slack.DEFAULT_SEARCH_SORT_DIR,
@@ -327,7 +400,7 @@ func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, 
 		Count:         params.limit,
 		Page:          params.page,
 	}
-	messagesRes, _, err := ch.apiProvider.SearchContext(ctx, params.query, searchParams)
+	messagesRes, _, err := ch.apiProvider.SearchContext(ctx, sanitizedQuery, searchParams)
 	if err != nil {
 		ch.logger.Error("Slack SearchContext failed", zap.Error(utils.SanitizeError(err)))
 		return nil, err
