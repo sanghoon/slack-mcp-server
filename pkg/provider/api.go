@@ -11,6 +11,7 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/limiter"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider/edge"
 	"github.com/korotovsky/slack-mcp-server/pkg/transport"
+	"github.com/korotovsky/slack-mcp-server/pkg/utils"
 	"github.com/rusq/slackdump/v3/auth"
 	"github.com/slack-go/slack"
 	"go.uber.org/zap"
@@ -314,7 +315,7 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 	if xoxbToken != "" {
 		authProvider, err = auth.NewValueAuth(xoxbToken, "")
 		if err != nil {
-			logger.Fatal("Failed to create auth provider with XOXB token", zap.Error(err))
+			logger.Fatal("Failed to create auth provider with XOXB token", zap.Error(utils.SanitizeError(err)))
 		}
 
 		return newWithXOXB(transport, authProvider, logger)
@@ -325,7 +326,7 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 	if xoxpToken != "" {
 		authProvider, err = auth.NewValueAuth(xoxpToken, "")
 		if err != nil {
-			logger.Fatal("Failed to create auth provider with XOXP token", zap.Error(err))
+			logger.Fatal("Failed to create auth provider with XOXP token", zap.Error(utils.SanitizeError(err)))
 		}
 
 		return newWithXOXP(transport, authProvider, logger)
@@ -341,7 +342,7 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 
 	authProvider, err = auth.NewValueAuth(xoxcToken, xoxdToken)
 	if err != nil {
-		logger.Fatal("Failed to create auth provider with XOXC/XOXD tokens", zap.Error(err))
+		logger.Fatal("Failed to create auth provider with XOXC/XOXD tokens", zap.Error(utils.SanitizeError(err)))
 	}
 
 	return newWithXOXC(transport, authProvider, logger)
@@ -368,7 +369,7 @@ func newWithXOXB(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	} else {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
-			logger.Fatal("Failed to create MCP Slack client", zap.Error(err))
+			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
 		}
 	}
 
@@ -410,7 +411,7 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	} else {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
-			logger.Fatal("Failed to create MCP Slack client", zap.Error(err))
+			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
 		}
 	}
 
@@ -452,7 +453,7 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	} else {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
-			logger.Fatal("Failed to create MCP Slack client", zap.Error(err))
+			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
 		}
 	}
 
@@ -510,7 +511,7 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 		optionLimit,
 	)
 	if err != nil {
-		ap.logger.Error("Failed to fetch users", zap.Error(err))
+		ap.logger.Error("Failed to fetch users", zap.Error(utils.SanitizeError(err)))
 		return err
 	} else {
 		list = append(list, users...)
@@ -524,7 +525,7 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 
 	users, err = ap.GetSlackConnect(ctx)
 	if err != nil {
-		ap.logger.Error("Failed to fetch users from Slack Connect", zap.Error(err))
+		ap.logger.Error("Failed to fetch users from Slack Connect", zap.Error(utils.SanitizeError(err)))
 		return err
 	} else {
 		list = append(list, users...)
@@ -537,7 +538,7 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 	}
 
 	if data, err := json.MarshalIndent(list, "", "  "); err != nil {
-		ap.logger.Error("Failed to marshal users for cache", zap.Error(err))
+		ap.logger.Error("Failed to marshal users for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
 		if err := ioutil.WriteFile(ap.usersCache, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
@@ -585,7 +586,7 @@ func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
 	channels := ap.GetChannels(ctx, AllChanTypes)
 
 	if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
-		ap.logger.Error("Failed to marshal channels for cache", zap.Error(err))
+		ap.logger.Error("Failed to marshal channels for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
 		if err := ioutil.WriteFile(ap.channelsCache, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
@@ -612,7 +613,7 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 
 	boot, err := ap.client.ClientUserBoot(ctx)
 	if err != nil {
-		ap.logger.Error("Failed to fetch client user boot", zap.Error(err))
+		ap.logger.Error("Failed to fetch client user boot", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 
@@ -632,7 +633,7 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 	if len(collectedIDs) > 0 {
 		usersInfo, err := ap.client.GetUsersInfo(strings.Join(collectedIDs, ","))
 		if err != nil {
-			ap.logger.Error("Failed to fetch users info for shared IMs", zap.Error(err))
+			ap.logger.Error("Failed to fetch users info for shared IMs", zap.Error(utils.SanitizeError(err)))
 			return nil, err
 		}
 
@@ -683,13 +684,13 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 
 	for {
 		if err := ap.rateLimiter.Wait(ctx); err != nil {
-			ap.logger.Error("Rate limiter wait failed", zap.Error(err))
+			ap.logger.Error("Rate limiter wait failed", zap.Error(utils.SanitizeError(err)))
 			return nil
 		}
 
 		channels, nextcur, err = ap.client.GetConversationsContext(ctx, params)
 		if err != nil {
-			ap.logger.Error("Failed to fetch channels", zap.Error(err))
+			ap.logger.Error("Failed to fetch channels", zap.Error(utils.SanitizeError(err)))
 			break
 		}
 

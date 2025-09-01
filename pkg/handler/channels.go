@@ -11,6 +11,7 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server/auth"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
+	"github.com/korotovsky/slack-mcp-server/pkg/utils"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
@@ -48,7 +49,7 @@ func (ch *ChannelsHandler) ChannelsResource(ctx context.Context, request mcp.Rea
 
 	// mark3labs/mcp-go does not support middlewares for resources.
 	if authenticated, err := auth.IsAuthenticated(ctx, ch.apiProvider.ServerTransport(), ch.logger); !authenticated {
-		ch.logger.Error("Authentication failed for channels resource", zap.Error(err))
+		ch.logger.Error("Authentication failed for channels resource", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 
@@ -61,7 +62,7 @@ func (ch *ChannelsHandler) ChannelsResource(ctx context.Context, request mcp.Rea
 
 	ar, err := ch.apiProvider.Slack().AuthTest()
 	if err != nil {
-		ch.logger.Error("Auth test failed", zap.Error(err))
+		ch.logger.Error("Auth test failed", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 

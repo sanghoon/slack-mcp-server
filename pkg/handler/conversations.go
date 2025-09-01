@@ -16,6 +16,7 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server/auth"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
+	"github.com/korotovsky/slack-mcp-server/pkg/utils"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
 	slackGoUtil "github.com/takara2314/slack-go-util"
@@ -97,7 +98,7 @@ func (ch *ConversationsHandler) UsersResource(ctx context.Context, request mcp.R
 
 	// authentication
 	if authenticated, err := auth.IsAuthenticated(ctx, ch.apiProvider.ServerTransport(), ch.logger); !authenticated {
-		ch.logger.Error("Authentication failed for users resource", zap.Error(err))
+		ch.logger.Error("Authentication failed for users resource", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 
@@ -110,7 +111,7 @@ func (ch *ConversationsHandler) UsersResource(ctx context.Context, request mcp.R
 	// Slack auth test
 	ar, err := ch.apiProvider.Slack().AuthTest()
 	if err != nil {
-		ch.logger.Error("Slack AuthTest failed", zap.Error(err))
+		ch.logger.Error("Slack AuthTest failed", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 
@@ -198,7 +199,7 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 	)
 	respChannel, respTimestamp, err := ch.apiProvider.Slack().PostMessageContext(ctx, params.channel, options...)
 	if err != nil {
-		ch.logger.Error("Slack PostMessageContext failed", zap.Error(err))
+		ch.logger.Error("Slack PostMessageContext failed", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 
@@ -328,7 +329,7 @@ func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, 
 	}
 	messagesRes, _, err := ch.apiProvider.Slack().SearchContext(ctx, params.query, searchParams)
 	if err != nil {
-		ch.logger.Error("Slack SearchContext failed", zap.Error(err))
+		ch.logger.Error("Slack SearchContext failed", zap.Error(utils.SanitizeError(err)))
 		return nil, err
 	}
 	ch.logger.Debug("Search completed", zap.Int("matches", len(messagesRes.Matches)))
