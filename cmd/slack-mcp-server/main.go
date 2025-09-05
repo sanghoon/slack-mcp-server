@@ -7,8 +7,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 
+	"github.com/korotovsky/slack-mcp-server/pkg/config"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server"
 	"github.com/mattn/go-isatty"
@@ -42,28 +43,19 @@ func main() {
 	p := provider.New(transport, logger)
 	s := server.NewMCPServer(p, logger)
 
-	// Start cache initialization in parallel
-	var wg sync.WaitGroup
-	wg.Add(2)
-
+	// Start cache initialization in background
 	go func() {
-		defer wg.Done()
 		initUsersCache(p, logger)
-	}()
-
-	go func() {
-		defer wg.Done()
 		initChannelsCache(p, logger)
-	}()
 
-	// Start a goroutine to wait for both caches and log when ready
-	go func() {
-		wg.Wait()
 		if ready, _ := p.IsReady(); ready {
-			logger.Info("Slack MCP Server is fully ready",
+			logger.Info("Slack MCP Server caches are ready",
 				zap.String("context", "console"),
 			)
 		}
+
+		// Start cache refresh ticker after initial load
+		startCacheRefreshTicker(p, logger)
 	}()
 
 	switch transport {
@@ -118,7 +110,7 @@ func initUsersCache(p *provider.ApiProvider, logger *zap.Logger) {
 		zap.String("context", "console"),
 	)
 
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+	if config.IsDemoMode() {
 		logger.Info("Demo credentials are set, skip",
 			zap.String("context", "console"),
 		)
@@ -313,4 +305,57 @@ func getConsoleLevelEncoder(useColors bool) zapcore.LevelEncoder {
 		return zapcore.CapitalColorLevelEncoder
 	}
 	return zapcore.CapitalLevelEncoder
+}
+
+func startCacheRefreshTicker(p *provider.ApiProvider, logger *zap.Logger) {
+	// Check cache every hour
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Skip if demo mode
+		if config.IsDemoMode() {
+			continue
+		}
+
+		logger.Info("Refreshing caches from API",
+			zap.String("context", "console"),
+		)
+
+		ctx := context.Background()
+
+		// Delete users cache file to force refresh from API
+		usersCache := config.GetUsersCache()
+		if err := os.Remove(usersCache); err != nil && !os.IsNotExist(err) {
+			logger.Warn("Failed to remove users cache file",
+				zap.String("cache_file", usersCache),
+				zap.Error(err),
+			)
+		}
+
+		// Refresh users from API
+		if err := p.RefreshUsers(ctx); err != nil {
+			logger.Error("Failed to refresh users cache",
+				zap.String("context", "console"),
+				zap.Error(err),
+			)
+		}
+
+		// Delete channels cache file to force refresh from API
+		channelsCache := config.GetChannelsCache()
+		if err := os.Remove(channelsCache); err != nil && !os.IsNotExist(err) {
+			logger.Warn("Failed to remove channels cache file",
+				zap.String("cache_file", channelsCache),
+				zap.Error(err),
+			)
+		}
+
+		// Refresh channels from API
+		if err := p.RefreshChannels(ctx); err != nil {
+			logger.Error("Failed to refresh channels cache",
+				zap.String("context", "console"),
+				zap.Error(err),
+			)
+		}
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/korotovsky/slack-mcp-server/pkg/config"
 	"github.com/korotovsky/slack-mcp-server/pkg/limiter"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider/edge"
 	"github.com/korotovsky/slack-mcp-server/pkg/transport"
@@ -167,7 +168,7 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 }
 
 func (c *MCPSlackClient) AuthTest() (*slack.AuthTestResponse, error) {
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+	if config.IsDemoMode() {
 		return &slack.AuthTestResponse{
 			URL:          "https://_.slack.com",
 			Team:         "Demo Team",
@@ -360,19 +361,10 @@ func newWithXOXB(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
-	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
-	if usersCache == "" {
-		usersCache = ".users_cache.json"
-	}
+	usersCache := config.GetUsersCache()
+	channelsCache := config.GetChannelsCache()
 
-	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
-	if channelsCache == "" {
-		channelsCache = ".channels_cache.json"
-	}
-
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
-		logger.Info("Demo credentials are set, skip.")
-	} else {
+	if !config.IsDemoMode() {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
 			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
@@ -380,10 +372,9 @@ func newWithXOXB(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	}
 
 	return &ApiProvider{
-		transport: transport,
-		client:    client,
-		logger:    logger,
-
+		transport:   transport,
+		client:      client,
+		logger:      logger,
 		rateLimiter: limiter.Tier2.Limiter(),
 
 		users:      make(map[string]slack.User),
@@ -402,19 +393,10 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
-	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
-	if usersCache == "" {
-		usersCache = ".users_cache.json"
-	}
+	usersCache := config.GetUsersCache()
+	channelsCache := config.GetChannelsCache()
 
-	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
-	if channelsCache == "" {
-		channelsCache = ".channels_cache.json"
-	}
-
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
-		logger.Info("Demo credentials are set, skip.")
-	} else {
+	if !config.IsDemoMode() {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
 			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
@@ -422,10 +404,9 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	}
 
 	return &ApiProvider{
-		transport: transport,
-		client:    client,
-		logger:    logger,
-
+		transport:   transport,
+		client:      client,
+		logger:      logger,
 		rateLimiter: limiter.Tier2.Limiter(),
 
 		users:      make(map[string]slack.User),
@@ -454,9 +435,7 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		channelsCache = ".channels_cache_v2.json"
 	}
 
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
-		logger.Info("Demo credentials are set, skip.")
-	} else {
+	if !config.IsDemoMode() {
 		client, err = NewMCPSlackClient(authProvider, logger)
 		if err != nil {
 			logger.Fatal("Failed to create MCP Slack client", zap.Error(utils.SanitizeError(err)))
@@ -464,10 +443,9 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	}
 
 	return &ApiProvider{
-		transport: transport,
-		client:    client,
-		logger:    logger,
-
+		transport:   transport,
+		client:      client,
+		logger:      logger,
 		rateLimiter: limiter.Tier2.Limiter(),
 
 		users:      make(map[string]slack.User),
@@ -569,7 +547,7 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 	if data, err := json.MarshalIndent(usersList, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal users for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
-		if err := ioutil.WriteFile(ap.usersCache, data, 0644); err != nil {
+		if err := utils.WriteFileAtomic(ap.usersCache, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
 				zap.String("cache_file", ap.usersCache),
 				zap.Error(err))
@@ -624,7 +602,7 @@ func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
 	if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal channels for cache", zap.Error(utils.SanitizeError(err)))
 	} else {
-		if err := ioutil.WriteFile(ap.channelsCache, data, 0644); err != nil {
+		if err := utils.WriteFileAtomic(ap.channelsCache, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
 				zap.String("cache_file", ap.channelsCache),
 				zap.Error(err))
@@ -806,6 +784,23 @@ func (ap *ApiProvider) unsafeGetChannels(ctx context.Context, channelTypes []str
 
 func (ap *ApiProvider) ProvideUsersMap() *UsersCache {
 	ap.cacheMu.RLock()
+	ready := ap.usersReady
+	ap.cacheMu.RUnlock()
+
+	// If cache is not ready, try to refresh it synchronously
+	if !ready {
+		ctx := context.Background()
+		if err := ap.RefreshUsers(ctx); err != nil {
+			ap.logger.Error("Failed to refresh users on demand", zap.Error(err))
+			// Return empty cache on error
+			return &UsersCache{
+				Users:    make(map[string]slack.User),
+				UsersInv: make(map[string]string),
+			}
+		}
+	}
+
+	ap.cacheMu.RLock()
 	defer ap.cacheMu.RUnlock()
 
 	// Create a copy of the maps to avoid race conditions
@@ -825,6 +820,23 @@ func (ap *ApiProvider) ProvideUsersMap() *UsersCache {
 }
 
 func (ap *ApiProvider) ProvideChannelsMaps() *ChannelsCache {
+	ap.cacheMu.RLock()
+	ready := ap.channelsReady
+	ap.cacheMu.RUnlock()
+
+	// If cache is not ready, try to refresh it synchronously
+	if !ready {
+		ctx := context.Background()
+		if err := ap.RefreshChannels(ctx); err != nil {
+			ap.logger.Error("Failed to refresh channels on demand", zap.Error(err))
+			// Return empty cache on error
+			return &ChannelsCache{
+				Channels:    make(map[string]Channel),
+				ChannelsInv: make(map[string]string),
+			}
+		}
+	}
+
 	ap.cacheMu.RLock()
 	defer ap.cacheMu.RUnlock()
 
@@ -847,7 +859,7 @@ func (ap *ApiProvider) ProvideChannelsMaps() *ChannelsCache {
 func (ap *ApiProvider) IsReady() (bool, error) {
 	ap.cacheMu.RLock()
 	defer ap.cacheMu.RUnlock()
-	
+
 	if !ap.usersReady {
 		return false, ErrUsersNotReady
 	}
