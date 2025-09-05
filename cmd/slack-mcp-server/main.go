@@ -308,9 +308,15 @@ func getConsoleLevelEncoder(useColors bool) zapcore.LevelEncoder {
 }
 
 func startCacheRefreshTicker(p *provider.ApiProvider, logger *zap.Logger) {
-	// Check cache every hour
-	ticker := time.NewTicker(1 * time.Hour)
+	// Get cache refresh interval from config
+	interval := config.GetCacheRefreshInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	logger.Info("Cache refresh ticker started",
+		zap.String("context", "console"),
+		zap.Duration("interval", interval),
+	)
 
 	for range ticker.C {
 		// Skip if demo mode

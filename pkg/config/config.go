@@ -45,3 +45,18 @@ func IsDemoMode() bool {
 		os.Getenv("SLACK_MCP_XOXB_TOKEN") == "demo" ||
 		(os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo")
 }
+
+// GetCacheRefreshInterval returns the cache refresh interval from environment variable or default
+func GetCacheRefreshInterval() time.Duration {
+	intervalStr := os.Getenv("SLACK_MCP_CACHE_REFRESH_HOURS")
+	if intervalStr == "" {
+		return 1 * time.Hour // Default to 1 hour
+	}
+
+	hours, err := strconv.Atoi(intervalStr)
+	if err != nil || hours <= 0 {
+		return 1 * time.Hour // Default to 1 hour on error
+	}
+
+	return time.Duration(hours) * time.Hour
+}
